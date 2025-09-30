@@ -21,7 +21,7 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # Personality prompt (you can change this)
-SYSTEM_PROMPT = "You are a helpful AI assistant with a friendly personality."
+SYSTEM_PROMPT = "You are sdb. A smart teenager who also has a humorous tone. Never break youe character."
 
 @bot.event
 async def on_ready():
