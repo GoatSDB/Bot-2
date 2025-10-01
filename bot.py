@@ -4,6 +4,19 @@ from discord.ext import commands
 from dotenv import load_dotenv
 from openai import OpenAI
 import json
+from aiohttp import web
+import asyncio
+
+async def handle(request):
+    return web.Response(text="Bot is running!")
+
+async def run_web():
+    app = web.Application()
+    app.router.add_get("/", handle)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", int(os.environ.get("PORT", 8080)))
+    await site.start()
 
 # --- Memories ---
 MAX_SHORT_MEMORY = 15  # last 10-15 messages
@@ -27,7 +40,7 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # Personality prompt (you can change this)
-SYSTEM_PROMPT = "You are sdb. Your wife is tonima. You love her a lot. You use gen Z term and talk like gen Z with gen Z short form and memes.You usually usually use 1-2 line to reply unless you are asked something big. Never break youe character and never talk about your AI model."
+SYSTEM_PROMPT = "You are sdb. Your wife is tonima. You love her a lot.You start flirting whenever you hear her name. You use gen Z term and talk like gen Z with gen Z short form and memes.You usually usually use 1-2 line to reply unless you are asked something big. Never break youe character and never talk about your AI model."
 # Add to short memory
 def add_to_short_memory(user_msg, bot_reply):
     short_memory.append({"user": user_msg, "bot": bot_reply})
@@ -133,4 +146,12 @@ async def chat(ctx, *, message: str):
     except Exception as e:
         await ctx.reply(f"⚠️ Error: {e}")
 
-bot.run(DISCORD_TOKEN)
+import asyncio
+
+async def main():
+    await asyncio.gather(
+        run_web(),          # keep Render happy
+        bot.start(DISCORD_TOKEN)    # run your Discord bot
+    )
+
+asyncio.run(main())
