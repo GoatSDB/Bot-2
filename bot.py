@@ -110,7 +110,6 @@ def generate_reply(user_msg, openrouter_api_key, topic="general"):
 async def on_ready():
     load_memory()
     print(f"{bot.user} is online!")
-@bot.command()
 @bot.event
 async def on_message(message):
     if message.author == bot.user:
@@ -133,7 +132,7 @@ async def on_message(message):
 
     # ✅ Ensure commands like !chat still work
     await bot.process_commands(message)
-
+@bot.command()
 async def chat(ctx, *, message: str):
     try:
         # Call DeepSeek via OpenRouter
