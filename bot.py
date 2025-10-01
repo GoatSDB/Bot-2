@@ -107,7 +107,6 @@ def generate_reply(user_msg, openrouter_api_key, topic="general"):
         reply = "Sorry, I could not respond."
     return reply
 @bot.event
-@bot.event
 async def on_ready():
     load_memory()
     print(f"{bot.user} is online!")
@@ -118,7 +117,7 @@ async def on_message(message):
         return
 
     user_msg = message.content
-    topic = "general"  # you can later make this dynamic
+    topic = "general"
 
     # Generate reply using memory
     reply = generate_reply(user_msg, OPENROUTER_API_KEY, topic)
@@ -131,6 +130,10 @@ async def on_message(message):
     if len(short_memory) % 10 == 0:
         long_memory[topic] = summarize_messages(short_memory, topic, OPENROUTER_API_KEY)
         save_memory()
+
+    # ✅ Ensure commands like !chat still work
+    await bot.process_commands(message)
+
 async def chat(ctx, *, message: str):
     try:
         # Call DeepSeek via OpenRouter
