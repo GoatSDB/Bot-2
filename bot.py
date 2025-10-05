@@ -128,7 +128,7 @@ async def handle_chat(ctx, persona: str, message: str):
     recent_conv = "\n".join([f"User: {m['user']}\nBot: {m['bot']}" for m in memory["short"]])
     full_prompt = f"{memory_text}\nRecent conversation:\n{recent_conv}\nUser: {message}\nBot:"
     reply = safe_api_call(
-        model="deepseek/deepseek-chat-v3.1:free",
+        model="deepseek/deepseek-chat",
         messages=[
             {"role": "system", "content": persona_cfg["system_prompt"]},
             {"role": "user", "content": full_prompt},
