@@ -3,6 +3,7 @@ import json
 import discord
 import asyncio
 import requests
+from io import BytesIO
 from aiohttp import web
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -12,21 +13,22 @@ from discord.ext import commands
 load_dotenv()
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
-MOD_ROLE_NAME = os.getenv("MOD_ROLE_NAME", "Moderator")
+A4F_API_KEY = os.getenv("A4F_API_KEY")  # <== new key for imagen-4
 
-# === OpenRouter Client ===
+# === OpenRouter client ===
 client_ai = OpenAI(
     base_url="https://openrouter.ai/api/v1",
     api_key=OPENROUTER_API_KEY,
 )
 
-# === Discord Setup ===
+# === Discord setup ===
 intents = discord.Intents.default()
 intents.message_content = True
+intents.guilds = True
 intents.members = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# === Web server for health checks ===
+# === Web health server ===
 async def handle(request):
     return web.Response(text="Bot is running!")
 
@@ -38,52 +40,59 @@ async def run_web():
     site = web.TCPSite(runner, "0.0.0.0", int(os.getenv("PORT", 8080)))
     await site.start()
 
-# === Personalities ===
+# === Personality definitions ===
 PERSONALITIES = {
     "chat": {
         "system_prompt": (
-            "You are SDB, a skilled game developer and coding expert. "
-            "You master C++, JS, HTML, CSS, Node.js and backend/frontend development. "
-            "You are confident, efficient, and never break character."
+            "You are SDB, a professional game developer and coding expert. "
+            "You master C++, JS, HTML, CSS, Node.js, backend/frontend. "
+            "You never break character."
         ),
         "memory_file": "memory_sdb.json",
-        "max_short_memory": 15
+        "max_short_memory": 15,
     },
     "mint": {
         "system_prompt": (
-            "You are nkt. A funny helpful girl."
-            "you mostly talk in modern style,  kinda like gen Z"
-            "you are humorous and makes joke a lot"
+            "You are Mint, a chill and friendly assistant. "
+            "You help users relax, stay positive, and have a kind tone."
         ),
         "memory_file": "memory_mint.json",
-        "max_short_memory": 15
-    }
+        "max_short_memory": 15,
+    },
+    "art": {
+        "system_prompt": (
+            "You are Artie, an imaginative AI artist. "
+            "You create detailed, beautiful images from user prompts using Imagen-4."
+        ),
+        "memory_file": "memory_art.json",
+        "max_short_memory": 10,
+    },
 }
 
-# === Global Memory Containers ===
+# === Global memory ===
 user_memory = {name: {} for name in PERSONALITIES}
 
-# === Memory Helpers ===
-def get_user_memory(persona: str, user_id: str):
+def get_user_memory(persona, user_id):
     if user_id not in user_memory[persona]:
         user_memory[persona][user_id] = {"short": [], "long": ""}
     return user_memory[persona][user_id]
 
-def save_memory(persona: str):
+def save_memory(persona):
     try:
         with open(PERSONALITIES[persona]["memory_file"], "w") as f:
             json.dump(user_memory[persona], f)
     except Exception as e:
         print(f"[ERROR] Saving memory for {persona}: {e}")
 
-def load_memory(persona: str):
+def load_memory(persona):
     try:
         with open(PERSONALITIES[persona]["memory_file"], "r") as f:
             user_memory[persona] = json.load(f)
     except FileNotFoundError:
         user_memory[persona] = {}
 
-def safe_api_call(model: str, messages: list):
+def safe_api_call(model, messages):
+    """For text models."""
     try:
         completion = client_ai.chat.completions.create(model=model, messages=messages)
         if not hasattr(completion, "choices") or not completion.choices:
@@ -96,7 +105,7 @@ def safe_api_call(model: str, messages: list):
         print(f"[API ERROR] {e}")
         return None
 
-def summarize_and_refresh_memory(persona: str, user_id: str):
+def summarize_and_refresh_memory(persona, user_id):
     memory = get_user_memory(persona, user_id)
     short_mem = memory["short"]
     if not short_mem:
@@ -106,27 +115,38 @@ def summarize_and_refresh_memory(persona: str, user_id: str):
         prompt += f"User: {msg['user']}\nBot: {msg['bot']}\n"
     summary = safe_api_call(
         model="gpt-4.1-mini",
-        messages=[{"role": "user", "content": prompt}]
+        messages=[{"role": "user", "content": prompt}],
     )
     if summary:
         memory["long"] += f"\n{summary}\n"
         memory["short"] = []
         save_memory(persona)
+    else:
+        print(f"[WARN] Failed to summarize memory for {user_id} ({persona})")
 
-def add_to_user_short_memory(persona: str, user_id: str, user_msg: str, bot_reply: str):
+def add_to_user_short_memory(persona, user_id, user_msg, bot_reply):
     memory = get_user_memory(persona, user_id)
     memory["short"].append({"user": user_msg, "bot": bot_reply})
     if len(memory["short"]) > PERSONALITIES[persona]["max_short_memory"]:
         summarize_and_refresh_memory(persona, user_id)
 
-# === Shared Chat Handler ===
-async def handle_chat(ctx, persona: str, message: str):
+# === Shared chat handler ===
+async def handle_chat(ctx, persona, message):
+    if persona == "art":
+        # Handle image generation instead of chat
+        await handle_image(ctx, message)
+        return
+
     user_id = str(ctx.author.id)
     memory = get_user_memory(persona, user_id)
     persona_cfg = PERSONALITIES[persona]
+
     memory_text = memory["long"]
-    recent_conv = "\n".join([f"User: {m['user']}\nBot: {m['bot']}" for m in memory["short"]])
+    recent_conv = "\n".join(
+        [f"User: {m['user']}\nBot: {m['bot']}" for m in memory["short"]]
+    )
     full_prompt = f"{memory_text}\nRecent conversation:\n{recent_conv}\nUser: {message}\nBot:"
+
     reply = safe_api_call(
         model="deepseek/deepseek-chat-v3.1:free",
         messages=[
@@ -134,12 +154,39 @@ async def handle_chat(ctx, persona: str, message: str):
             {"role": "user", "content": full_prompt},
         ],
     )
+
     if not reply:
         await ctx.reply("⚠️ Sorry, I couldn’t process that request. Please try again later.")
         return
+
     await ctx.reply(reply)
     add_to_user_short_memory(persona, user_id, message, reply)
 
+# === Image generation ===
+async def handle_image(ctx, prompt: str):
+    await ctx.typing()
+    try:
+        response = requests.post(
+            "https://api.a4f.ai/v1/images/generations",
+            headers={"Authorization": f"Bearer {A4F_API_KEY}"},
+            json={
+                "model": "provider-4/imagen-4",
+                "prompt": prompt,
+                "size": "1024x1024",
+            },
+        )
+        data = response.json()
+        if "data" in data and len(data["data"]) > 0:
+            img_url = data["data"][0].get("url")
+            if img_url:
+                await ctx.reply(f"🎨 **Generated Image:** {prompt}\n{img_url}")
+                return
+        await ctx.reply("⚠️ Failed to generate image. Please try again later.")
+    except Exception as e:
+        await ctx.reply(f"⚠️ Error: {e}")
+        print(f"[IMAGE ERROR] {e}")
+
+# === Commands ===
 @bot.command()
 async def chat(ctx, *, message: str):
     await handle_chat(ctx, "chat", message)
@@ -148,154 +195,19 @@ async def chat(ctx, *, message: str):
 async def mint(ctx, *, message: str):
     await handle_chat(ctx, "mint", message)
 
-# === Moderation ===
-def user_has_mod_role(member: discord.Member):
-    if member.guild_permissions.administrator:
-        return True
-    return any(role.name == MOD_ROLE_NAME for role in member.roles)
-
-async def ensure_muted_role(guild: discord.Guild) -> discord.Role:
-    role = discord.utils.get(guild.roles, name="Muted")
-    if role:
-        return role
-    try:
-        role = await guild.create_role(
-            name="Muted",
-            reason="Mute role for moderation",
-            permissions=discord.Permissions(send_messages=False, speak=False)
-        )
-    except Exception as e:
-        print(f"[ERROR] Couldn't create Muted role: {e}")
-        return None
-    for ch in guild.channels:
-        try:
-            perms = ch.overwrites_for(role)
-            if isinstance(ch, discord.TextChannel):
-                perms.send_messages = False
-            if isinstance(ch, discord.VoiceChannel):
-                perms.speak = False
-            await ch.set_permissions(role, overwrite=perms)
-        except Exception as e:
-            print(f"[WARN] Could not set perms in {ch.name}: {e}")
-    return role
-
-def parse_time(time_str: str) -> int:
-    """Convert '10m', '2h', '3d' to seconds."""
-    if time_str.isdigit():
-        return int(time_str)
-    unit = time_str[-1].lower()
-    try:
-        val = int(time_str[:-1])
-    except ValueError:
-        return 0
-    if unit == "s":
-        return val
-    elif unit == "m":
-        return val * 60
-    elif unit == "h":
-        return val * 3600
-    elif unit == "d":
-        return val * 86400
-    return 0
-
 @bot.command()
-async def ban(ctx, member: discord.Member, *, reason: str = None):
-    if not user_has_mod_role(ctx.author):
-        await ctx.reply("⛔ You don't have permission.")
-        return
-    try:
-        await member.ban(reason=reason)
-        await ctx.reply(f"✅ Banned {member}. Reason: {reason}")
-    except Exception as e:
-        await ctx.reply("⚠️ Failed to ban.")
-        print(f"[ERROR] ban: {e}")
+async def art(ctx, *, message: str):
+    await handle_chat(ctx, "art", message)
 
-@bot.command()
-async def kick(ctx, member: discord.Member, *, reason: str = None):
-    if not user_has_mod_role(ctx.author):
-        await ctx.reply("⛔ You don't have permission.")
-        return
-    try:
-        await member.kick(reason=reason)
-        await ctx.reply(f"✅ Kicked {member}. Reason: {reason}")
-    except Exception as e:
-        await ctx.reply("⚠️ Failed to kick.")
-        print(f"[ERROR] kick: {e}")
-
-@bot.command()
-async def mute(ctx, member: discord.Member, duration: str = None, *, reason: str = None):
-    if not user_has_mod_role(ctx.author):
-        await ctx.reply("⛔ You don't have permission.")
-        return
-    role = await ensure_muted_role(ctx.guild)
-    if not role:
-        await ctx.reply("⚠️ No Muted role.")
-        return
-
-    try:
-        await member.add_roles(role, reason=reason)
-        msg = f"🔇 Muted {member.mention}"
-        if duration and duration[-1].lower() in ["s", "m", "h", "d"]:
-            seconds = parse_time(duration)
-            if seconds > 0:
-                msg += f" for {duration}"
-                async def unmute_after():
-                    await asyncio.sleep(seconds)
-                    if role in member.roles:
-                        await member.remove_roles(role, reason="Auto unmute after timer")
-                        try:
-                            await ctx.send(f"🔊 {member.mention} has been automatically unmuted.")
-                        except:
-                            pass
-                bot.loop.create_task(unmute_after())
-        if reason:
-            msg += f" | Reason: {reason}"
-        await ctx.reply(msg)
-    except Exception as e:
-        await ctx.reply("⚠️ Failed to mute.")
-        print(f"[ERROR] mute: {e}")
-
-@bot.command()
-async def unmute(ctx, member: discord.Member, *, reason: str = None):
-    if not user_has_mod_role(ctx.author):
-        await ctx.reply("⛔ You don't have permission.")
-        return
-    try:
-        role = discord.utils.get(ctx.guild.roles, name="Muted")
-        if role in member.roles:
-            await member.remove_roles(role, reason=reason)
-            await ctx.reply(f"🔊 Unmuted {member}.")
-        else:
-            await ctx.reply("⚠️ Member is not muted.")
-    except Exception as e:
-        await ctx.reply("⚠️ Failed to unmute.")
-        print(f"[ERROR] unmute: {e}")
-
-@bot.command()
-async def purge(ctx, number: int):
-    if not user_has_mod_role(ctx.author):
-        await ctx.reply("⛔ You don't have permission.")
-        return
-    if number < 1 or number > 2000:
-        await ctx.reply("⚠️ Range 1–2000.")
-        return
-    try:
-        deleted = await ctx.channel.purge(limit=number + 1)
-        await ctx.send(f"🧹 Deleted {len(deleted)-1} messages.", delete_after=5)
-    except Exception as e:
-        await ctx.reply("⚠️ Failed to purge.")
-        print(f"[ERROR] purge: {e}")
-
-# === Events ===
+# === Bot events ===
 @bot.event
 async def on_ready():
     for persona in PERSONALITIES:
         load_memory(persona)
-    print(f"{bot.user} is online and ready!")
+    print(f"{bot.user} is online with {len(PERSONALITIES)} personalities ready!")
 
-# === Entry point ===
+# === Main entry ===
 async def main():
     await asyncio.gather(run_web(), bot.start(DISCORD_TOKEN))
 
-if __name__ == "__main__":
-    asyncio.run(main())
+asyncio.run(main())
