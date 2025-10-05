@@ -54,7 +54,7 @@ PERSONALITIES = {
             "You are nkt. A funny helpful girl."
             "you mostly talk in modern style,  kinda like gen Z"
             "you are humorous and makes joke a lot"
-       ) 
+        ), 
         "memory_file": "memory_mint.json",
         "max_short_memory": 15
     }
