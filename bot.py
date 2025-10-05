@@ -14,6 +14,9 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 MOD_ROLE_NAME = os.getenv("MOD_ROLE_NAME", "Moderator")
 
+# === Model Configuration ===
+DEFAULT_MODEL = "x-ai/grok-4-fast"
+
 # === OpenRouter Client ===
 client_ai = OpenAI(
     base_url="https://openrouter.ai/api/v1",
@@ -51,10 +54,10 @@ PERSONALITIES = {
     },
     "mint": {
         "system_prompt": (
-            "You are nkt. A funny helpful girl."
-            "you mostly talk in modern style,  kinda like gen Z"
-            "you are humorous and makes joke a lot"
-        ), 
+            "You are nkt. A funny, helpful girl. "
+            "You mostly talk in a modern, Gen Z style. "
+            "You are humorous and make a lot of jokes."
+        ),
         "memory_file": "memory_mint.json",
         "max_short_memory": 15
     }
@@ -79,8 +82,15 @@ def save_memory(persona: str):
 def load_memory(persona: str):
     try:
         with open(PERSONALITIES[persona]["memory_file"], "r") as f:
-            user_memory[persona] = json.load(f)
+            data = json.load(f)
+            if isinstance(data, dict):
+                user_memory[persona] = data
+            else:
+                user_memory[persona] = {}
     except FileNotFoundError:
+        user_memory[persona] = {}
+    except json.JSONDecodeError:
+        print(f"[WARN] Memory file for {persona} is invalid JSON — resetting.")
         user_memory[persona] = {}
 
 def safe_api_call(model: str, messages: list):
@@ -105,7 +115,7 @@ def summarize_and_refresh_memory(persona: str, user_id: str):
     for msg in short_mem:
         prompt += f"User: {msg['user']}\nBot: {msg['bot']}\n"
     summary = safe_api_call(
-        model="gpt-4.1-mini",
+        model=DEFAULT_MODEL,
         messages=[{"role": "user", "content": prompt}]
     )
     if summary:
@@ -128,7 +138,7 @@ async def handle_chat(ctx, persona: str, message: str):
     recent_conv = "\n".join([f"User: {m['user']}\nBot: {m['bot']}" for m in memory["short"]])
     full_prompt = f"{memory_text}\nRecent conversation:\n{recent_conv}\nUser: {message}\nBot:"
     reply = safe_api_call(
-        model="deepseek/deepseek-chat",
+        model=DEFAULT_MODEL,
         messages=[
             {"role": "system", "content": persona_cfg["system_prompt"]},
             {"role": "user", "content": full_prompt},
@@ -140,6 +150,7 @@ async def handle_chat(ctx, persona: str, message: str):
     await ctx.reply(reply)
     add_to_user_short_memory(persona, user_id, message, reply)
 
+# === Discord Commands ===
 @bot.command()
 async def chat(ctx, *, message: str):
     await handle_chat(ctx, "chat", message)
@@ -291,7 +302,7 @@ async def purge(ctx, number: int):
 async def on_ready():
     for persona in PERSONALITIES:
         load_memory(persona)
-    print(f"{bot.user} is online and ready!")
+    print(f"{bot.user} is online and ready! Using model: {DEFAULT_MODEL}")
 
 # === Entry point ===
 async def main():
